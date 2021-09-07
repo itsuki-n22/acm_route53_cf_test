@@ -1,0 +1,253 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description:
+  Create ProxyServer, Subnet and Security Group
+Parameters:
+  Service:
+    Type: String
+    Default: "proxy-server"
+  VpcCidrBlock:
+    Type: String
+    Default: "10.0.0.0/16"
+  PublicSubnetCidrBlock:
+    Type: String
+    Default: "10.0.10.0/24"
+  AMI:
+    Type: String
+    Default: "ami-02892a4ea9bfa2192"
+  InstanceType:
+    Type: String
+    Default: "t2.micro"
+  KEYNAME:
+    Type: String
+    Default: testkey # [TODO]
+  AZ:
+    Type: String
+    Default: "ap-northeast-1a" # [TODO]
+  Env:
+    Type: String
+    Default: "mock" # [TODO]
+Resources:
+  VPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: !Ref VpcCidrBlock
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-VPC"
+        - Key: Service
+          Value: !Sub "${Service}"
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-internet-gateway"
+        - Key: Service
+          Value: !Sub "${Service}"
+  InternetGatewayAttachment:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC 
+  PublicSubnet02:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: "ap-northeast-1c" # [TODO]
+      CidrBlock: '10.0.11.0/24'
+      VpcId: !Ref VPC 
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-public-2"
+        - Key: Service
+          Value: !Sub "${Service}"
+  SecurityGroup02:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Service}-security-group-02"
+      GroupDescription: !Sub "${Service} SecurityGroup"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          Description: "ssh"
+          FromPort: 22
+          IpProtocol: "tcp"
+          ToPort: 22
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-security-group-02"
+        - Key: Service
+          Value: !Sub "${Service}"
+  PublicSubnet01:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone: !Ref AZ
+      CidrBlock: !Ref PublicSubnetCidrBlock
+      VpcId: !Ref VPC 
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-public-1"
+        - Key: Service
+          Value: !Sub "${Service}"
+  SecurityGroupLb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Service}-${Env}-security-group-lb"
+      GroupDescription: !Sub "${Service}-${Env} SecurityGroupLb"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          Description: "http"
+          FromPort: 80
+          IpProtocol: "tcp"
+          ToPort: 80
+        - CidrIp: "0.0.0.0/0"
+          Description: "https"
+          FromPort: 443
+          IpProtocol: "tcp"
+          ToPort: 443
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-${Env}-security-group-lb"
+        - Key: Env
+          Value: !Sub "${Env}"
+        - Key: Service
+          Value: !Sub "${Service}"
+  SecurityGroup01:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Service}-security-group-01"
+      GroupDescription: !Sub "${Service} SecurityGroup"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          Description: "ssh"
+          FromPort: 22
+          IpProtocol: "tcp"
+          ToPort: 22
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-security-group-01"
+        - Key: Service
+          Value: !Sub "${Service}"
+  PublicSubnetRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref VPC 
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-public-subnet01-route-table"
+        - Key: Service
+          Value: !Sub "${Service}"
+  PublicSubnetRoute:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway 
+  PublicSubnetRouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet01 
+      RouteTableId: !Ref PublicSubnetRouteTable
+  ProxyServerEC2:
+    Type: AWS::EC2::Instance
+    DependsOn: SecurityGroup01
+    Properties:
+      AvailabilityZone: !Ref AZ 
+      ImageId: !Sub "${AMI}"
+      InstanceType: !Sub "${InstanceType}"
+      KeyName: !Sub "${KEYNAME}"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-ProxyServer"
+        - Key: Role
+          Value: "ProxyServer"
+      NetworkInterfaces: 
+        - AssociatePublicIpAddress: "true"
+          DeviceIndex: "0"
+          GroupSet: 
+            - !Ref SecurityGroup01
+          SubnetId: !Ref PublicSubnet01
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: "/"
+      HealthCheckIntervalSeconds: 10
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Name: !Sub "${Service}-${Env}-lb-tg"
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        !Ref VPC
+      Targets: 
+        - Id: 
+            !Ref ProxyServerEC2
+          Port: 80
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-${Env}-lb-tg"
+        - Key: Env
+          Value: !Sub "${Env}"
+        - Key: Service
+          Value: !Sub "${Service}"
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${Service}-${Env}-lb"
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SecurityGroupLb
+      Subnets:
+        - !Ref PublicSubnet01
+        - !Ref PublicSubnet02
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub "${Service}-${Env}-lb"
+        - Key: Env
+          Value: !Sub "${Env}"
+        - Key: Service
+          Value: !Sub "${Service}"
+  ListenerHttp:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      Port: 80
+      Protocol: HTTP
+      LoadBalancerArn: !Ref LoadBalancer
+  ALBListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Port: 443
+      Protocol: HTTPS
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Certificates:
+        - CertificateArn: !Ref ACM
+  ACM:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: "foo.tan5.tech"
+      DomainValidationOptions:
+        - DomainName: "foo.tan5.tech"
+          HostedZoneId: "Z076776122T2RVHKVBEC1"
+      ValidationMethod: DNS
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: "Z076776122T2RVHKVBEC1"
+      Comment: "DNS for ALB"
+      Name: "foo.tan5.tech"
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt 'LoadBalancer.CanonicalHostedZoneID'
+        DNSName: !GetAtt 'LoadBalancer.DNSName'
